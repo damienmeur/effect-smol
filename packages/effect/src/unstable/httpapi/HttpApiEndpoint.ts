@@ -61,6 +61,7 @@ import { identity } from "../../Function.ts"
 import { type Pipeable, pipeArguments } from "../../Pipeable.ts"
 import * as Predicate from "../../Predicate.ts"
 import * as Schema from "../../Schema.ts"
+import * as AST from "../../SchemaAST.ts"
 import type * as Stream from "../../Stream.ts"
 import type * as Types from "../../Types.ts"
 import type { HttpMethod } from "../http/HttpMethod.ts"
@@ -95,6 +96,28 @@ export type PayloadMap = ReadonlyMap<string, {
   readonly schemas: [Schema.Top, ...Array<Schema.Top>]
 }>
 
+/** @internal */
+export type SuccessSchema = Schema.Top | HttpApiSchema.StreamDeclaration
+
+type SuccessType<S> = S extends Schema.Top ? S["Type"] : never
+
+type SuccessEncodingServices<S> = S extends Schema.Top ? S["EncodingServices"] : never
+
+type SuccessDecodingServices<S> = S extends Schema.Top ? S["DecodingServices"] : never
+
+type ExtractSuccessOrArray<S extends SuccessConstraint> = S extends ReadonlyArray<SuccessSchema> ? S[number] : S
+
+type ExtractBufferedSuccess<S extends SuccessConstraint> = Extract<ExtractSuccessOrArray<S>, Schema.Top>
+
+type ExtractStreamSuccess<S extends SuccessConstraint> = Extract<
+  ExtractSuccessOrArray<S>,
+  HttpApiSchema.StreamDeclaration
+>
+
+type JsonSuccessOrArray<S extends SuccessConstraint> = [ExtractBufferedSuccess<S>] extends [never] ?
+  ExtractStreamSuccess<S>
+  : Json<ExtractBufferedSuccess<S>> | ExtractStreamSuccess<S>
+
 /**
  * Represents an API endpoint. An API endpoint is mapped to a single route on
  * the underlying `HttpRouter`.
@@ -110,7 +133,7 @@ export interface HttpApiEndpoint<
   out Query extends Schema.Top = never,
   out Payload extends Schema.Top = never,
   out Headers extends Schema.Top = never,
-  out Success extends Schema.Top = typeof HttpApiSchema.NoContent,
+  out Success extends SuccessSchema = typeof HttpApiSchema.NoContent,
   out Error extends Schema.Top = never,
   in out Middleware = never,
   out MiddlewareR = never
@@ -132,7 +155,7 @@ export interface HttpApiEndpoint<
   readonly query: Schema.Top | undefined
   readonly headers: Schema.Top | undefined
   readonly payload: PayloadMap
-  readonly success: ReadonlySet<Schema.Top>
+  readonly success: ReadonlySet<SuccessSchema>
   readonly error: ReadonlySet<Schema.Top>
   readonly annotations: Context.Context<never>
   readonly middlewares: ReadonlySet<Context.Key<Middleware, any>>
@@ -224,7 +247,7 @@ export function getPayloadSchemas(endpoint: AnyWithProps): Array<Schema.Top> {
 
 /** @internal */
 export function getSuccessSchemas(endpoint: AnyWithProps): [Schema.Top, ...Array<Schema.Top>] {
-  const schemas = Array.from(endpoint.success)
+  const schemas = Array.from(endpoint.success).filter(Schema.isSchema)
   return Arr.isArrayNonEmpty(schemas) ? schemas : [HttpApiSchema.NoContent]
 }
 
@@ -250,7 +273,7 @@ export function getErrorSchemas(endpoint: AnyWithProps): Array<Schema.Top> {
 export interface Any extends Pipeable {
   readonly [TypeId]: any
   readonly name: string
-  readonly ["~Success"]: Schema.Top
+  readonly ["~Success"]: SuccessSchema
   readonly ["~Error"]: Schema.Top
 }
 
@@ -629,7 +652,7 @@ export type ServerServices<Endpoint> = Endpoint extends HttpApiEndpoint<
     | _Query["DecodingServices"]
     | _Payload["DecodingServices"]
     | _Headers["DecodingServices"]
-    | _Success["EncodingServices"]
+    | SuccessEncodingServices<_Success>
     | _Error["EncodingServices"]
     | HttpApiMiddleware.ErrorServicesEncode<_M>
   : never
@@ -658,7 +681,7 @@ export type ClientServices<Endpoint> = Endpoint extends HttpApiEndpoint<
     | _Query["EncodingServices"]
     | _Payload["EncodingServices"]
     | _Headers["EncodingServices"]
-    | _Success["DecodingServices"]
+    | SuccessDecodingServices<_Success>
     | _Error["DecodingServices"]
   : never
 
@@ -714,7 +737,7 @@ export type ErrorServicesDecode<Endpoint> = Endpoint extends HttpApiEndpoint<
  */
 export type Handler<Endpoint extends Any, E, R> = (
   request: Types.Simplify<Request<Endpoint>>
-) => Effect<Endpoint["~Success"]["Type"] | HttpServerResponse, Endpoint["~Error"]["Type"] | E, R>
+) => Effect<SuccessType<Endpoint["~Success"]> | HttpServerResponse, Endpoint["~Error"]["Type"] | E, R>
 
 /**
  * The raw server handler for an endpoint, receiving a request shape without a
@@ -725,7 +748,7 @@ export type Handler<Endpoint extends Any, E, R> = (
  */
 export type HandlerRaw<Endpoint extends Any, E, R> = (
   request: Types.Simplify<RequestRaw<Endpoint>>
-) => Effect<Endpoint["~Success"]["Type"] | HttpServerResponse, Endpoint["~Error"]["Type"] | E, R>
+) => Effect<SuccessType<Endpoint["~Success"]> | HttpServerResponse, Endpoint["~Error"]["Type"] | E, R>
 
 /**
  * Selects the endpoint with the specified name from a union of endpoints.
@@ -778,7 +801,7 @@ export type HandlerRawWithName<Endpoints extends Any, Name extends string, E, R>
  */
 export type SuccessWithName<Endpoints extends Any, Name extends string> = Success<
   WithName<Endpoints, Name>
->["Type"]
+> extends infer S ? SuccessType<S> : never
 
 /**
  * Computes the full error value union for the endpoint with the specified name in
@@ -986,7 +1009,7 @@ function makeProto<
   Query extends Schema.Top,
   Payload extends Schema.Top,
   Headers extends Schema.Top,
-  Success extends Schema.Top,
+  Success extends SuccessSchema,
   Error extends Schema.Top,
   Middleware,
   MiddlewareR
@@ -998,7 +1021,7 @@ function makeProto<
   readonly query: Schema.Top | undefined
   readonly headers: Schema.Top | undefined
   readonly payload: PayloadMap
-  readonly success: ReadonlySet<Schema.Top>
+  readonly success: ReadonlySet<SuccessSchema>
   readonly error: ReadonlySet<Schema.Top>
   readonly annotations: Context.Context<never>
   readonly middlewares: ReadonlySet<Context.Key<Middleware, any>>
@@ -1066,7 +1089,7 @@ export type PayloadConstraint<Method extends HttpMethod> = Method extends HttpMe
     string,
     Schema.Encoder<string | ReadonlyArray<string> | undefined, unknown>
   > :
-  SuccessConstraint
+  Schema.Top | ReadonlyArray<Schema.Top>
 
 /**
  * Payload constraint used when automatic codecs are enabled: no-body methods
@@ -1087,7 +1110,7 @@ export type PayloadConstraintCodecs<Method extends HttpMethod> = Method extends 
  * @category constraints
  * @since 4.0.0
  */
-export type SuccessConstraint = Schema.Top | ReadonlyArray<Schema.Top>
+export type SuccessConstraint = SuccessSchema | ReadonlyArray<SuccessSchema>
 
 /**
  * Constraint for error response schemas, allowing either a single schema or a
@@ -1115,7 +1138,7 @@ export const make = <Method extends HttpMethod>(method: Method): {
     Query extends Schema.Top | Schema.Struct.Fields = never,
     Payload extends PayloadConstraintCodecs<Method> = never,
     Headers extends Schema.Top | Schema.Struct.Fields = never,
-    const Success extends Schema.Top | ReadonlyArray<Schema.Top> = HttpApiSchema.NoContent,
+    const Success extends SuccessConstraint = HttpApiSchema.NoContent,
     const Error extends Schema.Top | ReadonlyArray<Schema.Top> = never
   >(
     name: Name,
@@ -1138,7 +1161,7 @@ export const make = <Method extends HttpMethod>(method: Method): {
     Method extends HttpMethod.WithBody ? Json<ExtractSchemaOrArray<Payload>>
       : StringTree<ExtractSchemaOrArray<Payload>>,
     StringTree<Headers extends Schema.Struct.Fields ? Schema.Struct<Headers> : Headers>,
-    Json<Success extends ReadonlyArray<Schema.Top> ? Success[number] : Success>,
+    JsonSuccessOrArray<Success>,
     Json<Error extends ReadonlyArray<Schema.Top> ? Error[number] : Error>
   >
   <
@@ -1170,7 +1193,7 @@ export const make = <Method extends HttpMethod>(method: Method): {
     Query extends Schema.Struct.Fields ? Schema.Struct<Query> : Query,
     ExtractSchemaOrArray<Payload>,
     ExtractSchemaOrArray<Headers>,
-    Success extends ReadonlyArray<Schema.Top> ? Success[number] : Success,
+    ExtractSuccessOrArray<Success>,
     Error extends ReadonlyArray<Schema.Top> ? Error[number] : Error
   >
 } =>
@@ -1205,7 +1228,7 @@ export const make = <Method extends HttpMethod>(method: Method): {
     : Payload extends ReadonlyArray<Schema.Top> ? Payload[number]
     : Payload,
   Headers extends Schema.Struct.Fields ? Schema.Struct<Headers> : Headers,
-  Success extends ReadonlyArray<Schema.Top> ? Success[number] : Success,
+  ExtractSuccessOrArray<Success>,
   Error extends ReadonlyArray<Schema.Top> ? Error[number] : Error
 > => {
   const disableCodecs = options?.disableCodecs ?? false
@@ -1218,8 +1241,8 @@ export const make = <Method extends HttpMethod>(method: Method): {
     query: ensureStruct(options?.query, transformStringTree),
     headers: ensureStruct(options?.headers, transformStringTree),
     payload: getPayload(options?.payload, method, disableCodecs),
-    success: getResponse(options?.success, disableCodecs),
-    error: getResponse(options?.error, disableCodecs),
+    success: getSuccessResponse(options?.success, method, disableCodecs),
+    error: getErrorResponse(options?.error, disableCodecs),
     annotations: Context.empty(),
     middlewares: new Set()
   })
@@ -1299,13 +1322,138 @@ function getPayload(
   return result
 }
 
-function getResponse(
-  success: Schema.Top | ReadonlyArray<Schema.Top> | undefined,
+const streamSuccessStatus = 200
+
+const reservedStreamFailureEvent = "effect/httpapi/stream/failure"
+
+function getSuccessResponse(
+  success: SuccessSchema | ReadonlyArray<SuccessSchema> | undefined,
+  method: HttpMethod,
+  disableCodecs: boolean
+): Set<SuccessSchema> {
+  if (success === undefined) return new Set()
+  const schemas = Arr.ensure(success)
+  validateSuccessResponse(schemas, method)
+  return new Set(
+    disableCodecs ?
+      schemas :
+      schemas.map((schema) => HttpApiSchema.isStreamDeclaration(schema) ? schema : transformResponse(schema))
+  )
+}
+
+function getErrorResponse(
+  error: Schema.Top | ReadonlyArray<Schema.Top> | undefined,
   disableCodecs: boolean
 ): Set<Schema.Top> {
-  if (success === undefined) return new Set()
-  const arr = Arr.ensure(success)
-  return new Set(disableCodecs ? arr : arr.map(transformResponse))
+  if (error === undefined) return new Set()
+  const schemas = Arr.ensure(error)
+  for (const schema of schemas) {
+    if (HttpApiSchema.isStreamDeclaration(schema)) {
+      throw new Error("Streaming declarations are not supported in error responses")
+    }
+  }
+  return new Set(disableCodecs ? schemas : schemas.map(transformResponse))
+}
+
+function validateSuccessResponse(schemas: ReadonlyArray<SuccessSchema>, method: HttpMethod) {
+  const statuses = new Map<number, {
+    readonly stream?: HttpApiSchema.StreamDeclaration | undefined
+    buffered: boolean
+    noContent: boolean
+  }>()
+
+  for (const schema of schemas) {
+    if (HttpApiSchema.isStreamDeclaration(schema)) {
+      validateStreamSuccess(schema, method)
+      const status = streamSuccessStatus
+      const entry = getStatusEntry(statuses, status)
+      if (entry.stream !== undefined) {
+        throw new Error(`Multiple streaming success responses for status: ${status}`)
+      }
+      if (entry.noContent) {
+        throw new Error(`Cannot combine no-content and streaming success responses for status: ${status}`)
+      }
+      if (entry.buffered) {
+        throw new Error(`Cannot combine buffered and streaming success responses for status: ${status}`)
+      }
+      statuses.set(status, { ...entry, stream: schema })
+    } else {
+      const status = HttpApiSchema.getStatusSuccess(schema.ast)
+      const entry = getStatusEntry(statuses, status)
+      const noContent = HttpApiSchema.isNoContent(schema.ast)
+      if (entry.stream !== undefined) {
+        throw new Error(
+          noContent ?
+            `Cannot combine no-content and streaming success responses for status: ${status}` :
+            `Cannot combine buffered and streaming success responses for status: ${status}`
+        )
+      }
+      entry.buffered = true
+      entry.noContent = entry.noContent || noContent
+    }
+  }
+}
+
+function getStatusEntry(
+  statuses: Map<number, {
+    readonly stream?: HttpApiSchema.StreamDeclaration | undefined
+    buffered: boolean
+    noContent: boolean
+  }>,
+  status: number
+) {
+  let entry = statuses.get(status)
+  if (entry === undefined) {
+    entry = { buffered: false, noContent: false }
+    statuses.set(status, entry)
+  }
+  return entry
+}
+
+function validateStreamSuccess(schema: HttpApiSchema.StreamDeclaration, method: HttpMethod) {
+  if (method === "HEAD") {
+    throw new Error("HEAD endpoints cannot declare streaming success responses")
+  }
+  if (HttpApiSchema.isStreamSse(schema) && hasReservedSseEventName(schema.events.ast)) {
+    throw new Error(`SSE event name is reserved: ${reservedStreamFailureEvent}`)
+  }
+}
+
+function hasReservedSseEventName(ast: AST.AST): boolean {
+  return hasReservedEventName(AST.toEncoded(ast), new Set())
+}
+
+function hasReservedEventName(ast: AST.AST, seen: Set<AST.AST>): boolean {
+  if (seen.has(ast)) return false
+  seen.add(ast)
+  if (AST.isUnion(ast)) {
+    return ast.types.some((type) => hasReservedEventName(type, seen))
+  }
+  if (AST.isSuspend(ast)) {
+    return hasReservedEventName(ast.thunk(), seen)
+  }
+  if (!AST.isObjects(ast)) return false
+  const event = ast.propertySignatures.find((ps) => ps.name === "event")
+  return event !== undefined && hasReservedEventLiteral(event.type, seen)
+}
+
+function hasReservedEventLiteral(ast: AST.AST, seen: Set<AST.AST>): boolean {
+  if (seen.has(ast)) return false
+  seen.add(ast)
+  const encoded = AST.toEncoded(ast)
+  if (encoded !== ast) {
+    return hasReservedEventLiteral(encoded, seen)
+  }
+  if (AST.isLiteral(ast)) {
+    return ast.literal === reservedStreamFailureEvent
+  }
+  if (AST.isUnion(ast)) {
+    return ast.types.some((type) => hasReservedEventLiteral(type, seen))
+  }
+  if (AST.isSuspend(ast)) {
+    return hasReservedEventLiteral(ast.thunk(), seen)
+  }
+  return false
 }
 
 function transformResponse(schema: Schema.Top): Schema.Top {

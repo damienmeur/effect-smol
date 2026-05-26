@@ -159,7 +159,7 @@ export declare namespace Client {
   ] ? <Mode extends ResponseMode = ResponseMode>(
       request: Simplify<HttpApiEndpoint.ClientRequest<_Params, _Query, _Payload, _Headers, Mode>>
     ) => Effect.Effect<
-      Response<_Success["Type"], Mode>,
+      Response<Extract<_Success, Schema.Top>["Type"], Mode>,
       | HttpApiMiddleware.Error<_Middleware>
       | HttpApiMiddleware.ClientError<_Middleware>
       | E
@@ -170,7 +170,8 @@ export declare namespace Client {
       | _Query["EncodingServices"]
       | _Payload["EncodingServices"]
       | _Headers["EncodingServices"]
-      | ([Mode] extends ["response-only"] ? never : _Success["DecodingServices"] | _Error["DecodingServices"])
+      | ([Mode] extends ["response-only"] ? never
+        : Extract<_Success, Schema.Top>["DecodingServices"] | _Error["DecodingServices"])
     > :
     never
 
