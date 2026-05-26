@@ -395,7 +395,7 @@ export function fromApi<Id extends string, Groups extends HttpApiGroup.Any>(
       }
 
       function processResponseBodies(bodies: ResponseBodies, defaultDescription: () => string) {
-        for (const [status, { content, descriptions }] of bodies) {
+        for (const [status, { content, descriptions, streamContent }] of bodies) {
           const description = descriptions.size > 0 ? Array.from(descriptions).join(" | ") : defaultDescription()
           op.responses[status] = {
             description
@@ -416,6 +416,51 @@ export function fromApi<Id extends string, Groups extends HttpApiGroup.Any>(
                   schema: {}
                 }
               })
+            })
+          }
+          if (streamContent !== undefined) {
+            streamContent.forEach((stream, contentType) => {
+              op.responses[status].content ??= {}
+              if (HttpApiSchema.isStreamSse(stream)) {
+                pathOps.push({
+                  _tag: "schema",
+                  ast: AST.getAST(stream.events),
+                  path: ["paths", path, method, "responses", String(status), "content", contentType, "schema"]
+                })
+                pathOps.push({
+                  _tag: "schema",
+                  ast: AST.getAST(Schema.toCodecJson(Schema.Cause(stream.error, Schema.Defect))),
+                  path: [
+                    "paths",
+                    path,
+                    method,
+                    "responses",
+                    String(status),
+                    "content",
+                    contentType,
+                    "x-effect-stream",
+                    "causeSchema"
+                  ]
+                })
+                op.responses[status].content[contentType] = {
+                  schema: {},
+                  "x-effect-stream": {
+                    encoding: "sse",
+                    causeSchema: {},
+                    failureEvent: reservedStreamFailureEvent
+                  }
+                }
+              } else {
+                op.responses[status].content[contentType] = {
+                  schema: {
+                    type: "string",
+                    format: "binary"
+                  },
+                  "x-effect-stream": {
+                    encoding: "uint8array"
+                  }
+                }
+              }
             })
           }
         }
@@ -489,11 +534,7 @@ export function fromApi<Id extends string, Groups extends HttpApiGroup.Any>(
       processParameters(endpoint.query, "query")
 
       processResponseBodies(
-        extractResponseBodies(
-          HttpApiEndpoint.getSuccessSchemas(endpoint),
-          HttpApiSchema.getStatusSuccess,
-          resolveDescriptionOrIdentifier
-        ),
+        extractSuccessResponseBodies(endpoint),
         () => "Success"
       )
       processResponseBodies(
@@ -592,24 +633,42 @@ type ResponseBodies = Map<
   {
     descriptions: Set<string>
     content: Content | undefined // undefined means no content
+    streamContent: StreamContent | undefined
   }
 >
 
+const streamSuccessStatus = 200
+const reservedStreamFailureEvent = "effect/httpapi/stream/failure"
+
+function extractSuccessResponseBodies(endpoint: HttpApiEndpoint.AnyWithProps): ResponseBodies {
+  const schemas = Array.from(endpoint.success)
+  return extractResponseBodies(
+    schemas.length > 0 ? schemas : [HttpApiSchema.NoContent],
+    HttpApiSchema.getStatusSuccess,
+    resolveDescriptionOrIdentifier
+  )
+}
+
 function extractResponseBodies(
-  schemas: Array<Schema.Top>,
+  schemas: Array<Schema.Top | HttpApiSchema.StreamDeclaration>,
   getStatus: (ast: AST.AST) => number,
   getDescription: (ast: AST.AST) => string | undefined
 ): ResponseBodies {
   const map = new Map<number, {
     descriptions: Set<string>
     content: Content | undefined
+    streamContent: StreamContent | undefined
   }>()
 
   schemas.forEach(process)
 
   return map
 
-  function process(schema: Schema.Top) {
+  function process(schema: Schema.Top | HttpApiSchema.StreamDeclaration) {
+    if (HttpApiSchema.isStreamDeclaration(schema)) {
+      addStreamContent(schema)
+      return
+    }
     const ast = schema.ast
     const status = getStatus(ast)
     if (HttpApiSchema.isNoContent(ast)) {
@@ -624,7 +683,8 @@ function extractResponseBodies(
     if (statusMap === undefined) {
       map.set(status, {
         descriptions: new Set([description]),
-        content: undefined
+        content: undefined,
+        streamContent: undefined
       })
     } else {
       if (description !== undefined) {
@@ -640,7 +700,8 @@ function extractResponseBodies(
     if (statusMap === undefined) {
       map.set(status, {
         descriptions: new Set(description !== undefined ? [description] : []),
-        content: new Map([[_tag, new Map([[contentType, new Set([schema])]])]])
+        content: new Map([[_tag, new Map([[contentType, new Set([schema])]])]]),
+        streamContent: undefined
       })
     } else {
       if (statusMap.content !== undefined) {
@@ -663,6 +724,19 @@ function extractResponseBodies(
       }
     }
   }
+
+  function addStreamContent(stream: HttpApiSchema.StreamDeclaration) {
+    const statusMap = map.get(streamSuccessStatus)
+    if (statusMap === undefined) {
+      map.set(streamSuccessStatus, {
+        descriptions: new Set(),
+        content: undefined,
+        streamContent: new Map([[stream.contentType, stream]])
+      })
+    } else if (statusMap.streamContent !== undefined) {
+      statusMap.streamContent.set(stream.contentType, stream)
+    }
+  }
 }
 
 function resolveDescriptionOrIdentifier(ast: AST.AST): string | undefined {
@@ -676,6 +750,8 @@ type Content = Map<
     Set<Schema.Top>
   >
 >
+
+type StreamContent = Map<string, HttpApiSchema.StreamDeclaration>
 
 const Uint8ArrayEncoding = Schema.String.annotate({
   format: "binary"
@@ -923,7 +999,24 @@ export interface OpenApiSpecResponse {
  */
 export interface OpenApiSpecMediaType {
   schema: JsonSchema.JsonSchema
+  "x-effect-stream"?: OpenApiSpecEffectStream
 }
+
+/**
+ * Effect-specific metadata for generated streaming response media types.
+ *
+ * @category models
+ * @since 4.0.0
+ */
+export type OpenApiSpecEffectStream =
+  | {
+    encoding: "sse"
+    causeSchema: JsonSchema.JsonSchema
+    failureEvent: "effect/httpapi/stream/failure"
+  }
+  | {
+    encoding: "uint8array"
+  }
 
 /**
  * Generated OpenAPI request body object for endpoint payloads.
