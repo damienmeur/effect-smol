@@ -45,8 +45,10 @@ import * as Schema from "../../Schema.ts"
 import * as AST from "../../SchemaAST.ts"
 import * as Issue from "../../SchemaIssue.ts"
 import * as Transformation from "../../SchemaTransformation.ts"
+import type * as Stream from "../../Stream.ts"
 import type { Simplify } from "../../Types.ts"
 import * as UndefinedOr from "../../UndefinedOr.ts"
+import type * as Sse from "../encoding/Sse.ts"
 import * as HttpBody from "../http/HttpBody.ts"
 import * as HttpClient from "../http/HttpClient.ts"
 import * as HttpClientError from "../http/HttpClientError.ts"
@@ -91,6 +93,25 @@ export type Client<Groups extends HttpApiGroup.Any, E = never, R = never> = Simp
 export type ForApi<Api extends HttpApi.Any, E = never, R = never> = Api extends
   HttpApi.HttpApi<infer _Id, infer Groups> ? Client<Groups, E, R> :
   never
+
+type ClientSuccessType<S> = S extends HttpApiSchema.StreamSse<
+  infer Events extends Schema.Top,
+  infer Error extends Schema.Top
+> ? Stream.Stream<
+    Events["Type"],
+    Error["Type"] | HttpClientError.HttpClientError | Schema.SchemaError | Sse.Retry
+  >
+  : S extends HttpApiSchema.StreamUint8Array ? Stream.Stream<Uint8Array, HttpClientError.HttpClientError>
+  : S extends Schema.Top ? S["Type"]
+  : never
+
+type ClientSuccessDecodingServices<S> = S extends HttpApiSchema.StreamSse<
+  infer Events extends Schema.Top,
+  infer Error extends Schema.Top
+> ? Events["DecodingServices"] | Error["DecodingServices"]
+  : S extends HttpApiSchema.StreamUint8Array ? never
+  : S extends Schema.Top ? S["DecodingServices"]
+  : never
 
 /**
  * Helper types used to describe generated HTTP API clients, including endpoint
@@ -159,7 +180,7 @@ export declare namespace Client {
   ] ? <Mode extends ResponseMode = ResponseMode>(
       request: Simplify<HttpApiEndpoint.ClientRequest<_Params, _Query, _Payload, _Headers, Mode>>
     ) => Effect.Effect<
-      Response<Extract<_Success, Schema.Top>["Type"], Mode>,
+      Response<ClientSuccessType<_Success>, Mode>,
       | HttpApiMiddleware.Error<_Middleware>
       | HttpApiMiddleware.ClientError<_Middleware>
       | E
@@ -171,7 +192,7 @@ export declare namespace Client {
       | _Payload["EncodingServices"]
       | _Headers["EncodingServices"]
       | ([Mode] extends ["response-only"] ? never
-        : Extract<_Success, Schema.Top>["DecodingServices"] | _Error["DecodingServices"])
+        : ClientSuccessDecodingServices<_Success> | _Error["DecodingServices"])
     > :
     never
 
