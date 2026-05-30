@@ -1,5 +1,13 @@
 # effect
 
+## 4.0.0-beta.75
+
+### Patch Changes
+
+- [#2298](https://github.com/Effect-TS/effect-smol/pull/2298) [`1fdd9ae`](https://github.com/Effect-TS/effect-smol/commit/1fdd9aeed92b6bb70987c862e7f6f66ead0339b3) Thanks @gcanti! - Remove the `Types.MergeRecord` alias. Use `Types.MergeLeft` instead.
+
+- [#2298](https://github.com/Effect-TS/effect-smol/pull/2298) [`1fdd9ae`](https://github.com/Effect-TS/effect-smol/commit/1fdd9aeed92b6bb70987c862e7f6f66ead0339b3) Thanks @gcanti! - Align Schema adapter failures: `Schema` result, promise, and sync adapters now surface `SchemaError`, while `SchemaParser` result, promise, and sync adapters expose `SchemaIssue.Issue`. Mark `SchemaParser` option adapters as internal because their error details are discarded.
+
 ## 4.0.0-beta.74
 
 ### Patch Changes

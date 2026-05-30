@@ -1,5 +1,12 @@
 # @effect/sql-pglite
 
+## 4.0.0-beta.75
+
+### Patch Changes
+
+- Updated dependencies [[`1fdd9ae`](https://github.com/Effect-TS/effect-smol/commit/1fdd9aeed92b6bb70987c862e7f6f66ead0339b3), [`1fdd9ae`](https://github.com/Effect-TS/effect-smol/commit/1fdd9aeed92b6bb70987c862e7f6f66ead0339b3)]:
+  - effect@4.0.0-beta.75
+
 ## 4.0.0-beta.74
 
 ### Patch Changes
